@@ -9,6 +9,13 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: UserService/user-service
+    env:
+      SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3307/user_service
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: root
     services:
       mysql:
         image: mysql:8.0
@@ -34,6 +41,9 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Install MySQL client (mysqladmin)
+        run: sudo apt-get update && sudo apt-get install -y mysql-client
+
       - name: Wait for MySQL to be healthy
         run: |
           for i in {1..30}; do
@@ -53,11 +63,8 @@ jobs:
           key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: ${{ runner.os }}-maven-
 
-      - name: Build with Maven
-        run: mvn -B clean package --file pom.xml
-
-      - name: Run tests
-        run: mvn test
+      - name: Build and test with Maven
+        run: mvn -B clean verify
 
       - name: Build Docker image
         run: docker build -t user-service:ci .
