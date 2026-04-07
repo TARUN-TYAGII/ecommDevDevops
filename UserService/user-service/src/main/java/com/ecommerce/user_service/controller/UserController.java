@@ -24,6 +24,11 @@ public class UserController {
         this.userService = userService;
     }
 
+    @GetMapping("/health")
+    public ResponseEntity<String> health() {
+        return ResponseEntity.ok("OK");
+    }
+
     @PostMapping("/register")
     public ResponseEntity<UserResponseDto> registerUser(@RequestBody UserRequestDto userRequestDto) {
         return ResponseEntity.ok(userService.registerUser(userRequestDto));
