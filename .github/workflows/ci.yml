@@ -78,8 +78,11 @@ jobs:
         with:
           version: v1.29.0
 
-      - name: Validate Kubernetes manifests (client dry-run)
-        run: kubectl apply --dry-run=client -f k8s/
+      # No cluster on the runner: kubectl would try OpenAPI from kubeconfig (often localhost:8080) and fail.
+      - name: Validate Kubernetes manifests (client dry-run, no schema fetch)
+        env:
+          KUBECONFIG: /dev/null
+        run: kubectl apply --dry-run=client --validate=false -f k8s/
 
   push-ghcr:
     needs: ci
