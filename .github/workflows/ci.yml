@@ -73,16 +73,15 @@ jobs:
       - name: Build Docker image (validation)
         run: docker build -t user-service:ci .
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: v1.29.0
+      # kubectl apply --dry-run=client still talks to the API server for discovery ("unable to recognize").
+      # kubeconform validates YAML against upstream K8s JSON schemas with no cluster.
+      - name: Install kubeconform
+        run: |
+          KUBECONFORM_VERSION=0.6.7
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" | sudo tar xz -C /usr/local/bin kubeconform
 
-      # No cluster on the runner: kubectl would try OpenAPI from kubeconfig (often localhost:8080) and fail.
-      - name: Validate Kubernetes manifests (client dry-run, no schema fetch)
-        env:
-          KUBECONFIG: /dev/null
-        run: kubectl apply --dry-run=client --validate=false -f k8s/
+      - name: Validate Kubernetes manifests (kubeconform)
+        run: kubeconform -kubernetes-version 1.29.0 -strict -summary k8s/
 
   push-ghcr:
     needs: ci
