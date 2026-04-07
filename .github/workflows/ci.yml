@@ -6,8 +6,12 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  build-and-test:
+  ci:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -33,13 +37,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: "17"
+          distribution: "temurin"
 
       - name: Install MySQL client (mysqladmin)
         run: sudo apt-get update && sudo apt-get install -y mysql-client
@@ -56,7 +60,7 @@ jobs:
           done
 
       - name: Set up Maven cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.m2/repository
@@ -66,5 +70,78 @@ jobs:
       - name: Build and test with Maven
         run: mvn -B clean verify
 
-      - name: Build Docker image
+      - name: Build Docker image (validation)
         run: docker build -t user-service:ci .
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.29.0
+
+      - name: Validate Kubernetes manifests (client dry-run)
+        run: kubectl apply --dry-run=client -f k8s/
+
+  push-ghcr:
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Lowercase owner (GHCR requires lowercase)
+        id: owner
+        run: echo "owner_lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: UserService/user-service
+          file: UserService/user-service/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.owner_lc }}/user-service:${{ github.sha }}
+            ghcr.io/${{ steps.owner.outputs.owner_lc }}/user-service:latest
+
+      - name: Image summary
+        run: |
+          echo "### Published image" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`ghcr.io/${{ steps.owner.outputs.owner_lc }}/user-service:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`ghcr.io/${{ steps.owner.outputs.owner_lc }}/user-service:latest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "On **Docker Desktop**, pull and roll out: run \`scripts/sync-from-registry.ps1\` (see script header), or set repo variable \`K8S_DEPLOY\` + secret \`KUBE_CONFIG\` for a **reachable** cluster (not localhost)." >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-k8s:
+    needs: push-ghcr
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      vars.K8S_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Lowercase owner
+        id: owner
+        run: echo "owner_lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.29.0
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+
+      - name: Roll out new image
+        run: |
+          IMAGE="ghcr.io/${{ steps.owner.outputs.owner_lc }}/user-service:${{ github.sha }}"
+          kubectl set image deployment/user-service "user-service=${IMAGE}" -n user-service
+          kubectl rollout status deployment/user-service -n user-service --timeout=180s
